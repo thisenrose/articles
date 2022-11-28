@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+
+# Discover all available specs
+`bundle exec rspec -f d --color --dry-run spec/`
+
+# Separates specs into groups with the same total runtime
+rspec_files = `bundle exec rake ci:load_specs_of_group[#{ENV['CI_NODE_TOTAL'].to_i},#{ENV["CI_NODE_INDEX"].to_i}]`
+
+# Run the spec group
+puts "Running: #{rspec_files}"
+exec "bundle exec rspec #{rspec_files}"

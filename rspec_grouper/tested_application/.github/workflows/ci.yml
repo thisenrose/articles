@@ -1,0 +1,70 @@
+name: CI
+
+on: [pull_request]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: docker-compose pull
+      - uses: satackey/action-docker-layer-caching@v0.0.11
+        continue-on-error: true
+      - run: docker-compose build
+
+  testing:
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        ci_node_total: [16]
+        ci_node_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Extract pull request uniq number
+        shell: bash
+        run: |-
+          pr_uniq_number=${{ github.ref }}
+          pr_uniq_number=${pr_uniq_number#refs/pull/}
+          pr_uniq_number=${pr_uniq_number%/merge}
+          echo "::set-output name=number::$(echo ${pr_uniq_number})"
+          echo ${pr_uniq_number}
+        id: pull_request_props
+
+      - uses: satackey/action-docker-layer-caching@v0.0.11
+        continue-on-error: true
+
+      - name: Setup database
+        run: |-
+          docker-compose run api rake db:create
+          docker-compose run api rake db:schema:load
+
+      - name: Run Rspec test
+        id: rspec-test
+        run: |
+          docker-compose run -e CI_NODE_TOTAL=${{ matrix.ci_node_total }} -e CI_NODE_INDEX=${{ matrix.ci_node_index }} -e GITHUB_SHA=${{ github.sha }} api ./bin/ci/rspec
+
+      - name: Send RSpec run times
+        id: rspec-send-run-times
+        run: |
+          docker-compose run api ./bin/ci/send_rspec_time_runs
+
+  testing-result:
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    name: Evaluate test results
+    needs: [testing]
+    steps:
+      - name: Check build matrix status
+        if: ${{ needs.testing.result != 'success' }}
+        run: exit 1
